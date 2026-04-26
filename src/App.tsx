@@ -35,6 +35,8 @@ import type { HistoryState, PixelDocument, PixelPoint, Tool } from './pixels'
 const CANVAS_SIZES = [16, 32, 64] as const
 const ZOOM_LEVELS = [8, 12, 16, 20, 24] as const
 const EXPORT_SCALES = [1, 4, 8, 16] as const
+const PRIMARY_POINTER_BUTTON = 0
+const SECONDARY_POINTER_BUTTON = 2
 const PALETTE = [
   '#1f2937',
   '#ffffff',
@@ -313,9 +315,14 @@ function App() {
   )
 
   const handlePointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (event.button !== 0) {
+    const isPrimaryButton = event.button === PRIMARY_POINTER_BUTTON
+    const isSecondaryButton = event.button === SECONDARY_POINTER_BUTTON
+
+    if (!isPrimaryButton && !isSecondaryButton) {
       return
     }
+
+    event.preventDefault()
 
     const point = getCanvasPoint(event, stateRef.current.history.present)
 
@@ -325,7 +332,7 @@ function App() {
 
     const currentState = stateRef.current
 
-    if (currentState.tool === 'eyedropper') {
+    if (isPrimaryButton && currentState.tool === 'eyedropper') {
       const color = getPixel(currentState.history.present, point.x, point.y)
 
       if (color && color.a > 0) {
@@ -339,13 +346,18 @@ function App() {
 
     const base = cloneDocument(currentState.history.present)
     const draft = cloneDocument(base)
-    paintPixel(draft, point, currentState.tool, currentState.color)
+    const strokeTool: Exclude<Tool, 'eyedropper'> =
+      isSecondaryButton || currentState.tool === 'eyedropper'
+        ? 'eraser'
+        : currentState.tool
+
+    paintPixel(draft, point, strokeTool, currentState.color)
     strokeRef.current = {
       pointerId: event.pointerId,
       base,
       draft,
       lastPoint: point,
-      tool: currentState.tool,
+      tool: strokeTool,
       color: currentState.color,
     }
 
@@ -532,6 +544,7 @@ function App() {
                 width={canvasWidth}
                 height={canvasHeight}
                 className={`pixel-canvas pixel-canvas-${state.tool}`}
+                onContextMenu={(event) => event.preventDefault()}
                 onPointerCancel={finishStroke}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
