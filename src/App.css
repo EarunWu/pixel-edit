@@ -112,7 +112,7 @@
 
 .export-button:hover,
 .wide-action:hover,
-.utility-button:hover {
+.utility-button:hover:not(:disabled) {
   background: #262f3d;
 }
 
@@ -143,11 +143,17 @@
 }
 
 .canvas-frame {
+  box-sizing: content-box;
   flex: 0 0 auto;
   position: relative;
   overflow: hidden;
   border: 1px solid #111827;
   border-radius: 6px;
+  background-color: transparent;
+  box-shadow: 0 20px 48px rgba(17, 24, 39, 0.16);
+}
+
+.canvas-frame-empty {
   background-color: #ffffff;
   background-image:
     linear-gradient(45deg, #d7dde6 25%, transparent 25%),
@@ -160,15 +166,28 @@
     8px -8px,
     -8px 0;
   background-size: 16px 16px;
-  box-shadow: 0 20px 48px rgba(17, 24, 39, 0.16);
+}
+
+.canvas-frame-with-background {
+  background: #ffffff;
+}
+
+.background-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  image-rendering: pixelated;
 }
 
 .pixel-canvas {
+  position: absolute;
   display: block;
-  width: 100%;
-  height: 100%;
   image-rendering: pixelated;
   touch-action: none;
+}
+
+.pixel-canvas-floating {
+  box-shadow: 0 0 0 1px #111827;
 }
 
 .pixel-canvas-pencil,
@@ -178,6 +197,14 @@
 
 .pixel-canvas-eyedropper {
   cursor: copy;
+}
+
+.pixel-canvas-move {
+  cursor: grab;
+}
+
+.pixel-canvas-move:active {
+  cursor: grabbing;
 }
 
 .side-panel {
@@ -312,8 +339,14 @@
   background: #f9fafb;
 }
 
-.utility-button:hover {
+.utility-button:hover:not(:disabled) {
   background: #eef2f7;
+}
+
+.utility-button:disabled {
+  color: #a1aab8;
+  cursor: not-allowed;
+  background: #f3f4f6;
 }
 
 .wide-action {
@@ -348,7 +381,15 @@
   gap: 12px;
 }
 
-.stats-section div {
+.background-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.stats-section div,
+.background-stats div {
   min-width: 0;
   padding: 12px;
   border: 1px solid #d9dee6;
@@ -364,7 +405,8 @@
   font-weight: 700;
 }
 
-.stats-section strong {
+.stats-section strong,
+.background-stats strong {
   color: #111827;
   font-size: 15px;
 }

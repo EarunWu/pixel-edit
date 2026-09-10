@@ -1,4 +1,4 @@
-export type Tool = 'pencil' | 'eraser' | 'eyedropper'
+export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'move'
 
 export type RgbaColor = {
   r: number
@@ -13,13 +13,24 @@ export type PixelDocument = {
   pixels: Uint8ClampedArray
 }
 
+export type HistoryEntry = {
+  document: PixelDocument
+  // Imports also reposition the canvas; pixel-only edits preserve its current position.
+  editorOffset?: PixelOffset
+}
+
 export type HistoryState = {
-  past: PixelDocument[]
+  past: HistoryEntry[]
   present: PixelDocument
-  future: PixelDocument[]
+  future: HistoryEntry[]
 }
 
 export type PixelPoint = {
+  x: number
+  y: number
+}
+
+export type PixelOffset = {
   x: number
   y: number
 }
@@ -218,6 +229,74 @@ export async function importImageFile(
   return imageDataToDocument(context.getImageData(0, 0, size.width, size.height))
 }
 
+export function getFrameSize(
+  document: PixelDocument,
+  background: PixelDocument | null,
+): { width: number; height: number } {
+  return {
+    width: Math.max(document.width, background?.width ?? 0),
+    height: Math.max(document.height, background?.height ?? 0),
+  }
+}
+
+export function centerOffset(
+  document: PixelDocument,
+  background: PixelDocument | null,
+): PixelOffset {
+  if (!background) {
+    return { x: 0, y: 0 }
+  }
+
+  return clampOffset(
+    {
+      x: Math.floor((background.width - document.width) / 2),
+      y: Math.floor((background.height - document.height) / 2),
+    },
+    document,
+    background,
+  )
+}
+
+export function clampOffset(
+  offset: PixelOffset,
+  document: PixelDocument,
+  background: PixelDocument | null,
+): PixelOffset {
+  if (!background) {
+    return { x: 0, y: 0 }
+  }
+
+  return {
+    x: clampInteger(offset.x, 0, Math.max(0, background.width - document.width)),
+    y: clampInteger(offset.y, 0, Math.max(0, background.height - document.height)),
+  }
+}
+
+export function getVisibleColor(
+  document: PixelDocument,
+  background: PixelDocument | null,
+  offset: PixelOffset,
+  point: PixelPoint,
+): RgbaColor | null {
+  const editorColor = getPixel(document, point.x, point.y)
+
+  if (editorColor && editorColor.a > 0) {
+    return editorColor
+  }
+
+  if (!background) {
+    return editorColor
+  }
+
+  const backgroundColor = getPixel(background, offset.x + point.x, offset.y + point.y)
+
+  if (backgroundColor && backgroundColor.a > 0) {
+    return backgroundColor
+  }
+
+  return editorColor
+}
+
 function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()
@@ -246,6 +325,10 @@ function fitWithinMaxSide(width: number, height: number) {
     width: Math.max(1, Math.round(width * ratio)),
     height: Math.max(1, Math.round(height * ratio)),
   }
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)))
 }
 
 function pixelIndex(document: PixelDocument, x: number, y: number): number {

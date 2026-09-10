@@ -3,7 +3,9 @@ import {
   Eraser,
   FilePlus2,
   Grid3X3,
+  ImageOff,
   ImagePlus,
+  Move,
   Pencil,
   Pipette,
   Redo2,
@@ -15,26 +17,22 @@ import {
 import type { ChangeEvent, PointerEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useReducer, useRef } from 'react'
 import './App.css'
+import { CANVAS_SIZES, ZOOM_LEVELS, EXPORT_SCALES, createInitialState, editorReducer } from './editor'
 import {
-  MAX_HISTORY,
-  clearDocument,
   cloneDocument,
-  createDocument,
   documentToImageData,
   drawLine,
   erasePixel,
   exportPng,
-  getPixel,
+  getFrameSize,
+  getVisibleColor,
   importImageFile,
   parseHexColor,
   rgbaToHex,
   setPixel,
 } from './pixels'
-import type { HistoryState, PixelDocument, PixelPoint, Tool } from './pixels'
+import type { PixelDocument, PixelOffset, PixelPoint, Tool } from './pixels'
 
-const CANVAS_SIZES = [16, 32, 64] as const
-const ZOOM_LEVELS = [8, 12, 16, 20, 24] as const
-const EXPORT_SCALES = [1, 4, 8, 16] as const
 const PRIMARY_POINTER_BUTTON = 0
 const SECONDARY_POINTER_BUTTON = 2
 const PALETTE = [
@@ -50,199 +48,45 @@ const PALETTE = [
   '#ec4899',
 ]
 
-type ImportMode = 'fit' | 'original'
-
-type EditorState = {
-  history: HistoryState
-  tool: Tool
-  color: string
-  zoom: (typeof ZOOM_LEVELS)[number]
-  showGrid: boolean
-  exportScale: (typeof EXPORT_SCALES)[number]
-  importMode: ImportMode
-  importError: string | null
-}
-
-type EditorAction =
-  | { type: 'set-tool'; tool: Tool }
-  | { type: 'set-color'; color: string }
-  | { type: 'set-zoom'; zoom: (typeof ZOOM_LEVELS)[number] }
-  | { type: 'set-export-scale'; exportScale: (typeof EXPORT_SCALES)[number] }
-  | { type: 'set-import-mode'; importMode: ImportMode }
-  | { type: 'set-import-error'; importError: string | null }
-  | { type: 'toggle-grid' }
-  | { type: 'new-document'; size: (typeof CANVAS_SIZES)[number] }
-  | { type: 'replace-present'; document: PixelDocument }
-  | { type: 'import-document'; document: PixelDocument }
-  | {
-      type: 'commit-stroke'
-      before: PixelDocument
-      document: PixelDocument
-    }
-  | { type: 'clear-document' }
-  | { type: 'undo' }
-  | { type: 'redo' }
-
 type StrokeState = {
   pointerId: number
   base: PixelDocument
   draft: PixelDocument
   lastPoint: PixelPoint
-  tool: Exclude<Tool, 'eyedropper'>
+  tool: PaintTool
   color: string
 }
 
-function createInitialState(): EditorState {
-  const present = createDocument(32, 32)
+type PaintTool = 'pencil' | 'eraser'
 
-  return {
-    history: {
-      past: [],
-      present,
-      future: [],
-    },
-    tool: 'pencil',
-    color: '#ef4444',
-    zoom: 16,
-    showGrid: true,
-    exportScale: 8,
-    importMode: 'fit',
-    importError: null,
-  }
-}
-
-function editorReducer(state: EditorState, action: EditorAction): EditorState {
-  switch (action.type) {
-    case 'set-tool':
-      return { ...state, tool: action.tool }
-    case 'set-color':
-      return { ...state, color: action.color }
-    case 'set-zoom':
-      return { ...state, zoom: action.zoom }
-    case 'set-export-scale':
-      return { ...state, exportScale: action.exportScale }
-    case 'set-import-mode':
-      return { ...state, importMode: action.importMode, importError: null }
-    case 'set-import-error':
-      return { ...state, importError: action.importError }
-    case 'toggle-grid':
-      return { ...state, showGrid: !state.showGrid }
-    case 'new-document': {
-      const present = createDocument(action.size, action.size)
-
-      return {
-        ...state,
-        history: {
-          past: [],
-          present,
-          future: [],
-        },
-      }
-    }
-    case 'import-document':
-      if (documentsEqual(state.history.present, action.document)) {
-        return { ...state, importError: null }
-      }
-
-      return {
-        ...state,
-        importError: null,
-        history: {
-          past: limitHistory([...state.history.past, state.history.present]),
-          present: action.document,
-          future: [],
-        },
-      }
-    case 'replace-present':
-      return {
-        ...state,
-        history: {
-          ...state.history,
-          present: action.document,
-        },
-      }
-    case 'commit-stroke':
-      if (documentsEqual(action.before, action.document)) {
-        return {
-          ...state,
-          history: {
-            ...state.history,
-            present: action.before,
-          },
-        }
-      }
-
-      return {
-        ...state,
-        history: {
-          past: limitHistory([...state.history.past, action.before]),
-          present: action.document,
-          future: [],
-        },
-      }
-    case 'clear-document': {
-      const cleared = clearDocument(state.history.present)
-
-      if (documentsEqual(state.history.present, cleared)) {
-        return state
-      }
-
-      return {
-        ...state,
-        history: {
-          past: limitHistory([...state.history.past, state.history.present]),
-          present: cleared,
-          future: [],
-        },
-      }
-    }
-    case 'undo': {
-      const previous = state.history.past.at(-1)
-
-      if (!previous) {
-        return state
-      }
-
-      return {
-        ...state,
-        history: {
-          past: state.history.past.slice(0, -1),
-          present: previous,
-          future: [state.history.present, ...state.history.future],
-        },
-      }
-    }
-    case 'redo': {
-      const next = state.history.future[0]
-
-      if (!next) {
-        return state
-      }
-
-      return {
-        ...state,
-        history: {
-          past: limitHistory([...state.history.past, state.history.present]),
-          present: next,
-          future: state.history.future.slice(1),
-        },
-      }
-    }
-    default:
-      return state
-  }
+type MoveState = {
+  pointerId: number
+  startClientX: number
+  startClientY: number
+  startOffset: PixelOffset
 }
 
 function App() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialState)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const editorCanvasRef = useRef<HTMLCanvasElement>(null)
+  const backgroundCanvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const backgroundFileInputRef = useRef<HTMLInputElement>(null)
   const stateRef = useRef(state)
   const strokeRef = useRef<StrokeState | null>(null)
+  const moveRef = useRef<MoveState | null>(null)
 
   const document = state.history.present
+  const background = state.background
+  const frameSize = getFrameSize(document, background)
+  const frameWidth = frameSize.width * state.zoom
+  const frameHeight = frameSize.height * state.zoom
+  const backgroundWidth = (background?.width ?? 0) * state.zoom
+  const backgroundHeight = (background?.height ?? 0) * state.zoom
   const canvasWidth = document.width * state.zoom
   const canvasHeight = document.height * state.zoom
+  const editorLeft = background ? state.editorOffset.x * state.zoom : 0
+  const editorTop = background ? state.editorOffset.y * state.zoom : 0
   const canUndo = state.history.past.length > 0
   const canRedo = state.history.future.length > 0
   const activeSize = CANVAS_SIZES.includes(
@@ -256,7 +100,7 @@ function App() {
   }, [state])
 
   useEffect(() => {
-    const canvas = canvasRef.current
+    const canvas = editorCanvasRef.current
 
     if (!canvas) {
       return
@@ -282,6 +126,30 @@ function App() {
       drawGrid(context, document.width, document.height, state.zoom)
     }
   }, [document, state.showGrid, state.zoom])
+
+  useEffect(() => {
+    const canvas = backgroundCanvasRef.current
+
+    if (!canvas || !background) {
+      return
+    }
+
+    const context = canvas.getContext('2d')
+
+    if (!context) {
+      return
+    }
+
+    context.imageSmoothingEnabled = false
+    context.clearRect(0, 0, canvas.width, canvas.height)
+
+    const source = window.document.createElement('canvas')
+    source.width = background.width
+    source.height = background.height
+    source.getContext('2d')?.putImageData(documentToImageData(background), 0, 0)
+
+    context.drawImage(source, 0, 0, canvas.width, canvas.height)
+  }, [background, backgroundHeight, backgroundWidth])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -332,8 +200,28 @@ function App() {
 
     const currentState = stateRef.current
 
+    if (
+      isPrimaryButton &&
+      currentState.tool === 'move' &&
+      currentState.background
+    ) {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      moveRef.current = {
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startOffset: currentState.editorOffset,
+      }
+      return
+    }
+
     if (isPrimaryButton && currentState.tool === 'eyedropper') {
-      const color = getPixel(currentState.history.present, point.x, point.y)
+      const color = getVisibleColor(
+        currentState.history.present,
+        currentState.background,
+        currentState.editorOffset,
+        point,
+      )
 
       if (color && color.a > 0) {
         dispatch({ type: 'set-color', color: rgbaToHex(color) })
@@ -346,8 +234,10 @@ function App() {
 
     const base = cloneDocument(currentState.history.present)
     const draft = cloneDocument(base)
-    const strokeTool: Exclude<Tool, 'eyedropper'> =
-      isSecondaryButton || currentState.tool === 'eyedropper'
+    const strokeTool: PaintTool =
+      isSecondaryButton ||
+      currentState.tool === 'eyedropper' ||
+      currentState.tool === 'move'
         ? 'eraser'
         : currentState.tool
 
@@ -365,6 +255,25 @@ function App() {
   }
 
   const handlePointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    const move = moveRef.current
+
+    if (move && move.pointerId === event.pointerId) {
+      const currentState = stateRef.current
+
+      dispatch({
+        type: 'set-editor-offset',
+        editorOffset: {
+          x:
+            move.startOffset.x +
+            Math.round((event.clientX - move.startClientX) / currentState.zoom),
+          y:
+            move.startOffset.y +
+            Math.round((event.clientY - move.startClientY) / currentState.zoom),
+        },
+      })
+      return
+    }
+
     const stroke = strokeRef.current
 
     if (!stroke || stroke.pointerId !== event.pointerId) {
@@ -385,6 +294,20 @@ function App() {
     dispatch({ type: 'replace-present', document: cloneDocument(stroke.draft) })
   }
 
+  const finishMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    const move = moveRef.current
+
+    if (!move || move.pointerId !== event.pointerId) {
+      return
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    moveRef.current = null
+  }
+
   const finishStroke = (event: PointerEvent<HTMLCanvasElement>) => {
     const stroke = strokeRef.current
 
@@ -402,6 +325,11 @@ function App() {
       document: cloneDocument(stroke.draft),
     })
     strokeRef.current = null
+  }
+
+  const finishPointer = (event: PointerEvent<HTMLCanvasElement>) => {
+    finishMove(event)
+    finishStroke(event)
   }
 
   const downloadPng = () => {
@@ -447,6 +375,27 @@ function App() {
     }
   }
 
+  const handleImportBackground = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) {
+      return
+    }
+
+    if (!file.type.startsWith('image/')) {
+      dispatch({ type: 'set-background-error', backgroundError: '请选择图片文件' })
+      return
+    }
+
+    try {
+      const importedBackground = await importImageFile(file)
+      dispatch({ type: 'set-background', background: importedBackground })
+    } catch {
+      dispatch({ type: 'set-background-error', backgroundError: '背景导入失败' })
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -477,6 +426,14 @@ function App() {
               onClick={() => dispatch({ type: 'set-tool', tool: 'eyedropper' })}
             >
               <Pipette size={18} />
+            </IconButton>
+            <IconButton
+              active={state.tool === 'move'}
+              disabled={!background}
+              label="移动"
+              onClick={() => dispatch({ type: 'set-tool', tool: 'move' })}
+            >
+              <Move size={18} />
             </IconButton>
           </div>
 
@@ -536,19 +493,39 @@ function App() {
         <section className="canvas-stage" aria-label="像素画布">
           <div className="canvas-scroll">
             <div
-              className="canvas-frame"
-              style={{ width: canvasWidth, height: canvasHeight }}
+              className={`canvas-frame ${
+                background ? 'canvas-frame-with-background' : 'canvas-frame-empty'
+              }`}
+              style={{ width: frameWidth, height: frameHeight }}
             >
+              {background ? (
+                <canvas
+                  ref={backgroundCanvasRef}
+                  width={backgroundWidth}
+                  height={backgroundHeight}
+                  className="background-canvas"
+                  style={{ width: backgroundWidth, height: backgroundHeight }}
+                  aria-hidden="true"
+                />
+              ) : null}
               <canvas
-                ref={canvasRef}
+                ref={editorCanvasRef}
                 width={canvasWidth}
                 height={canvasHeight}
-                className={`pixel-canvas pixel-canvas-${state.tool}`}
+                className={`pixel-canvas pixel-canvas-${state.tool} ${
+                  background ? 'pixel-canvas-floating' : ''
+                }`}
+                style={{
+                  left: editorLeft,
+                  top: editorTop,
+                  width: canvasWidth,
+                  height: canvasHeight,
+                }}
                 onContextMenu={(event) => event.preventDefault()}
-                onPointerCancel={finishStroke}
+                onPointerCancel={finishPointer}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
-                onPointerUp={finishStroke}
+                onPointerUp={finishPointer}
               />
             </div>
           </div>
@@ -653,6 +630,55 @@ function App() {
             {state.importError ? (
               <div className="import-error" role="alert">
                 {state.importError}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="control-section">
+            <div className="section-heading">背景</div>
+            <input
+              ref={backgroundFileInputRef}
+              className="file-input"
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              onChange={handleImportBackground}
+            />
+            <div className="inline-actions">
+              <button
+                className="utility-button"
+                type="button"
+                onClick={() => backgroundFileInputRef.current?.click()}
+              >
+                <ImagePlus size={17} />
+                上传背景
+              </button>
+              <button
+                className="utility-button"
+                disabled={!background}
+                type="button"
+                onClick={() => dispatch({ type: 'clear-background' })}
+              >
+                <ImageOff size={17} />
+                移除背景
+              </button>
+            </div>
+            <div className="background-stats">
+              <div>
+                <span className="stat-label">背景</span>
+                <strong>
+                  {background ? `${background.width} x ${background.height}` : '无'}
+                </strong>
+              </div>
+              <div>
+                <span className="stat-label">位置</span>
+                <strong>
+                  {background ? `${state.editorOffset.x}, ${state.editorOffset.y}` : '0, 0'}
+                </strong>
+              </div>
+            </div>
+            {state.backgroundError ? (
+              <div className="import-error" role="alert">
+                {state.backgroundError}
               </div>
             ) : null}
           </section>
@@ -831,22 +857,6 @@ function stepZoom(
   const nextIndex = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, index + direction))
 
   return ZOOM_LEVELS[nextIndex]
-}
-
-function limitHistory(history: PixelDocument[]) {
-  return history.slice(-MAX_HISTORY)
-}
-
-function documentsEqual(first: PixelDocument, second: PixelDocument) {
-  if (first.width !== second.width || first.height !== second.height) {
-    return false
-  }
-
-  if (first.pixels.length !== second.pixels.length) {
-    return false
-  }
-
-  return first.pixels.every((value, index) => value === second.pixels[index])
 }
 
 export default App
