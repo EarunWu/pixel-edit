@@ -15,7 +15,7 @@ export type PixelDocument = {
 
 export type HistoryEntry = {
   document: PixelDocument
-  // Imports also reposition the canvas; pixel-only edits preserve its current position.
+  // Imports and crops reposition the canvas; pixel-only edits preserve its position.
   editorOffset?: PixelOffset
 }
 
@@ -33,6 +33,11 @@ export type PixelPoint = {
 export type PixelOffset = {
   x: number
   y: number
+}
+
+export type PixelRect = PixelPoint & {
+  width: number
+  height: number
 }
 
 export const MAX_HISTORY = 50
@@ -56,6 +61,62 @@ export function cloneDocument(document: PixelDocument): PixelDocument {
 
 export function clearDocument(document: PixelDocument): PixelDocument {
   return createDocument(document.width, document.height)
+}
+
+export function isValidCropRect(
+  rect: PixelRect,
+  source: { width: number; height: number },
+): boolean {
+  return (
+    [rect.x, rect.y, rect.width, rect.height].every(Number.isInteger) &&
+    rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0 &&
+    rect.x + rect.width <= source.width &&
+    rect.y + rect.height <= source.height
+  )
+}
+
+export function clampCropRect(
+  rect: PixelRect,
+  source: { width: number; height: number },
+): PixelRect {
+  const width = clampInteger(rect.width, 1, source.width)
+  const height = clampInteger(rect.height, 1, source.height)
+  return {
+    width,
+    height,
+    x: clampInteger(rect.x, 0, source.width - width),
+    y: clampInteger(rect.y, 0, source.height - height),
+  }
+}
+
+export function cropDocument(document: PixelDocument, rect: PixelRect): PixelDocument {
+  if (!isValidCropRect(rect, document)) {
+    throw new Error('裁剪区域必须位于图片内，且尺寸和位置必须为整数像素')
+  }
+
+  const cropped = createDocument(rect.width, rect.height)
+  for (let y = 0; y < rect.height; y += 1) {
+    const start = pixelIndex(document, rect.x, rect.y + y)
+    cropped.pixels.set(document.pixels.subarray(start, start + rect.width * 4), y * rect.width * 4)
+  }
+  return cropped
+}
+
+export function cropImage(image: HTMLImageElement, rect: PixelRect): PixelDocument {
+  if (!isValidCropRect(rect, { width: image.naturalWidth, height: image.naturalHeight })) {
+    throw new Error('裁剪区域超出原图范围')
+  }
+
+  const canvas = window.document.createElement('canvas')
+  canvas.width = rect.width
+  canvas.height = rect.height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) {
+    throw new Error('无法读取图片像素')
+  }
+  context.imageSmoothingEnabled = false
+  context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height)
+  return imageDataToDocument(context.getImageData(0, 0, rect.width, rect.height))
 }
 
 export function parseHexColor(hex: string): RgbaColor {
@@ -210,7 +271,7 @@ export async function importImageFile(
   file: File,
   targetSize?: { width: number; height: number },
 ): Promise<PixelDocument> {
-  const image = await loadImage(file)
+  const image = await loadImageFile(file)
   const size = targetSize ?? fitWithinMaxSide(image.naturalWidth, image.naturalHeight)
   const canvas = window.document.createElement('canvas')
   canvas.width = size.width
@@ -297,7 +358,7 @@ export function getVisibleColor(
   return editorColor
 }
 
-function loadImage(file: File): Promise<HTMLImageElement> {
+export function loadImageFile(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()
     const url = URL.createObjectURL(file)

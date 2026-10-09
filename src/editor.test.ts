@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { createInitialState, editorReducer } from './editor'
-import { cloneDocument, createDocument, setPixel } from './pixels'
+import { cloneDocument, createDocument, getPixel, setPixel } from './pixels'
 
 function createEditorWithBackground() {
   return editorReducer(createInitialState(), {
@@ -104,5 +104,50 @@ describe('background alignment history', () => {
     expect(state.editorOffset).toEqual({ x: 0, y: 0 })
     state = editorReducer(state, { type: 'redo' })
     expect(state.editorOffset).toEqual({ x: 0, y: 0 })
+  })
+})
+
+describe('crop history', () => {
+  test('keeps the retained pixels aligned to the background through undo and redo', () => {
+    let state = createEditorWithBackground()
+    const original = createDocument(32, 32)
+    setPixel(original, 7, 9, { r: 10, g: 20, b: 30, a: 128 })
+    state = editorReducer(state, { type: 'import-document', document: original })
+    state = editorReducer(state, { type: 'set-editor-offset', editorOffset: { x: 5, y: 6 } })
+    const historyLength = state.history.past.length
+
+    state = editorReducer(state, { type: 'crop-document', rect: { x: 7, y: 9, width: 20, height: 12 } })
+    expect([state.history.present.width, state.history.present.height]).toEqual([20, 12])
+    expect(getPixel(state.history.present, 0, 0)).toEqual({ r: 10, g: 20, b: 30, a: 128 })
+    expect(state.editorOffset).toEqual({ x: 12, y: 15 })
+    expect(state.history.past).toHaveLength(historyLength + 1)
+
+    state = editorReducer(state, { type: 'undo' })
+    expect(state.history.present).toEqual(original)
+    expect(state.editorOffset).toEqual({ x: 5, y: 6 })
+    state = editorReducer(state, { type: 'redo' })
+    expect([state.history.present.width, state.history.present.height]).toEqual([20, 12])
+    expect(state.editorOffset).toEqual({ x: 12, y: 15 })
+  })
+
+  test('starts a new history branch after cropping an undone document', () => {
+    let state = editorReducer(createInitialState(), {
+      type: 'import-document', document: createDocument(48, 48),
+    })
+    state = editorReducer(state, { type: 'undo' })
+    state = editorReducer(state, { type: 'crop-document', rect: { x: 8, y: 4, width: 16, height: 24 } })
+    expect(state.history.future).toHaveLength(0)
+    expect(state.editorOffset).toEqual({ x: 0, y: 0 })
+    expect([state.history.present.width, state.history.present.height]).toEqual([16, 24])
+    state = editorReducer(state, { type: 'undo' })
+    expect([state.history.present.width, state.history.present.height]).toEqual([32, 32])
+  })
+
+  test('does not add history for a full-canvas crop or an invalid rectangle', () => {
+    const state = createInitialState()
+    expect(editorReducer(state, { type: 'crop-document', rect: { x: 0, y: 0, width: 32, height: 32 } }))
+      .toBe(state)
+    expect(editorReducer(state, { type: 'crop-document', rect: { x: 20, y: 20, width: 32, height: 32 } }))
+      .toBe(state)
   })
 })

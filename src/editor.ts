@@ -1,11 +1,14 @@
-import { MAX_HISTORY, centerOffset, clampOffset, clearDocument, createDocument } from './pixels'
-import type { HistoryEntry, HistoryState, PixelDocument, PixelOffset, Tool } from './pixels'
+import {
+  MAX_HISTORY, centerOffset, clampOffset, clearDocument, createDocument,
+  cropDocument, isValidCropRect,
+} from './pixels'
+import type { HistoryEntry, HistoryState, PixelDocument, PixelOffset, PixelRect, Tool } from './pixels'
 
 export const CANVAS_SIZES = [16, 32, 64] as const
 export const ZOOM_LEVELS = [8, 12, 16, 20, 24] as const
-export const EXPORT_SCALES = [1, 2, 4, 8, 16] as const
+export const EXPORT_SCALES = [1, 2, 3, 4, 8, 16] as const
 
-type ImportMode = 'fit' | 'original'
+type ImportMode = 'fit' | 'original' | 'crop'
 
 type EditorState = {
   history: HistoryState
@@ -36,6 +39,7 @@ type EditorAction =
   | { type: 'new-document'; size: (typeof CANVAS_SIZES)[number] }
   | { type: 'replace-present'; document: PixelDocument }
   | { type: 'import-document'; document: PixelDocument }
+  | { type: 'crop-document'; rect: PixelRect }
   | {
       type: 'commit-stroke'
       before: PixelDocument
@@ -140,6 +144,30 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           future: [],
         },
       }
+    case 'crop-document': {
+      if (!isValidCropRect(action.rect, state.history.present)) {
+        return state
+      }
+      const cropped = cropDocument(state.history.present, action.rect)
+      if (documentsEqual(state.history.present, cropped)) {
+        return state
+      }
+      return {
+        ...state,
+        editorOffset: clampOffset({
+          x: state.editorOffset.x + action.rect.x,
+          y: state.editorOffset.y + action.rect.y,
+        }, cropped, state.background),
+        history: {
+          past: limitHistory([
+            ...state.history.past,
+            { document: state.history.present, editorOffset: state.editorOffset },
+          ]),
+          present: cropped,
+          future: [],
+        },
+      }
+    }
     case 'replace-present':
       return {
         ...state,

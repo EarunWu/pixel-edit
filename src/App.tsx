@@ -1,4 +1,5 @@
 import {
+  Crop,
   Download,
   Eraser,
   FilePlus2,
@@ -15,11 +16,14 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import type { ChangeEvent, PointerEvent, ReactNode } from 'react'
-import { useEffect, useMemo, useReducer, useRef } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import './App.css'
+import CropDialog from './CropDialog'
+import type { CropSource } from './CropDialog'
 import { CANVAS_SIZES, ZOOM_LEVELS, EXPORT_SCALES, createInitialState, editorReducer } from './editor'
 import {
   cloneDocument,
+  cropImage,
   documentToImageData,
   drawLine,
   erasePixel,
@@ -27,11 +31,12 @@ import {
   getFrameSize,
   getVisibleColor,
   importImageFile,
+  loadImageFile,
   parseHexColor,
   rgbaToHex,
   setPixel,
 } from './pixels'
-import type { PixelDocument, PixelOffset, PixelPoint, Tool } from './pixels'
+import type { PixelDocument, PixelOffset, PixelPoint, PixelRect, Tool } from './pixels'
 
 const PRIMARY_POINTER_BUTTON = 0
 const SECONDARY_POINTER_BUTTON = 2
@@ -68,6 +73,7 @@ type MoveState = {
 
 function App() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialState)
+  const [cropSource, setCropSource] = useState<CropSource | null>(null)
   const editorCanvasRef = useRef<HTMLCanvasElement>(null)
   const backgroundCanvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -89,7 +95,7 @@ function App() {
   const editorTop = background ? state.editorOffset.y * state.zoom : 0
   const canUndo = state.history.past.length > 0
   const canRedo = state.history.future.length > 0
-  const activeSize = CANVAS_SIZES.includes(
+  const activeSize = document.width === document.height && CANVAS_SIZES.includes(
     document.width as (typeof CANVAS_SIZES)[number],
   )
     ? document.width
@@ -156,7 +162,10 @@ function App() {
       const key = event.key.toLowerCase()
       const isCommand = event.ctrlKey || event.metaKey
 
-      if (!isCommand) {
+      if (
+        !isCommand || event.defaultPrevented ||
+        (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], dialog'))
+      ) {
         return
       }
 
@@ -368,11 +377,27 @@ function App() {
         : undefined
 
     try {
+      if (currentState.importMode === 'crop') {
+        const image = await loadImageFile(file)
+        dispatch({ type: 'set-import-error', importError: null })
+        setCropSource({ kind: 'import', image })
+        return
+      }
       const importedDocument = await importImageFile(file, targetSize)
       dispatch({ type: 'import-document', document: importedDocument })
     } catch {
       dispatch({ type: 'set-import-error', importError: '图片导入失败' })
     }
+  }
+
+  const handleCrop = (rect: PixelRect) => {
+    if (!cropSource) return
+    if (cropSource.kind === 'import') {
+      dispatch({ type: 'import-document', document: cropImage(cropSource.image, rect) })
+    } else {
+      dispatch({ type: 'crop-document', rect })
+    }
+    setCropSource(null)
   }
 
   const handleImportBackground = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -434,6 +459,12 @@ function App() {
               onClick={() => dispatch({ type: 'set-tool', tool: 'move' })}
             >
               <Move size={18} />
+            </IconButton>
+            <IconButton
+              label="裁剪"
+              onClick={() => setCropSource({ kind: 'canvas', document })}
+            >
+              <Crop size={18} />
             </IconButton>
           </div>
 
@@ -609,7 +640,7 @@ function App() {
                     dispatch({ type: 'set-import-mode', importMode: 'fit' }),
                 },
                 {
-                  label: '原图上限256',
+                  label: '原图≤256',
                   active: state.importMode === 'original',
                   onClick: () =>
                     dispatch({
@@ -617,8 +648,16 @@ function App() {
                       importMode: 'original',
                     }),
                 },
+                {
+                  label: '裁剪导入',
+                  active: state.importMode === 'crop',
+                  onClick: () => dispatch({ type: 'set-import-mode', importMode: 'crop' }),
+                },
               ]}
             />
+            {state.importMode === 'crop' && (
+              <p className="control-hint">从原图中选取指定大小的区域，确认后导入。</p>
+            )}
             <button
               className="wide-action secondary-action"
               type="button"
@@ -626,6 +665,14 @@ function App() {
             >
               <ImagePlus size={18} />
               导入图片
+            </button>
+            <button
+              className="wide-action secondary-action"
+              type="button"
+              onClick={() => setCropSource({ kind: 'canvas', document })}
+            >
+              <Crop size={18} />
+              裁剪画布
             </button>
             {state.importError ? (
               <div className="import-error" role="alert">
@@ -726,6 +773,14 @@ function App() {
           </section>
         </aside>
       </main>
+      {cropSource && (
+        <CropDialog
+          source={cropSource}
+          initialSize={{ width: document.width, height: document.height }}
+          onApply={handleCrop}
+          onCancel={() => setCropSource(null)}
+        />
+      )}
     </div>
   )
 }
